@@ -1,10 +1,12 @@
 # extensions/CMakeLists.txt
 
 add_library(my_extensions
-   
+   updaters/selfPropelledParticleWithSimpleFriction.cpp
 )
 
 target_include_directories(my_extensions
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/updaters
     PRIVATE
     ${EIGEN3_INCLUDE_DIR}
     ../inc
