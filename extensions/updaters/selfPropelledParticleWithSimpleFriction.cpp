@@ -1,0 +1,95 @@
+#include "selfPropelledParticleWithSimpleFriction.h"
+
+#include <Eigen/SparseCore>
+#include <Eigen/SparseCholesky>
+
+/*! \file selfPropelledParticleWithSimpleFriction.cpp */
+
+void selfPropelledParticleWithSimpleFriction::computeFrictionMatrix(Eigen::SparseMatrix<double> &mat)
+    {
+    typedef Eigen::Triplet<double> T;
+    std::vector<T> tripletList;
+    tripletList.reserve(14*Ndof);
+
+    ArrayHandle<int> h_nn(activeModel->neighborNum,access_location::host,access_mode::read);
+    ArrayHandle<int> h_n(activeModel->neighbors,access_location::host,access_mode::read);
+    ArrayHandle<double2> h_p(activeModel->cellPositions,access_location::host,access_mode::read);
+    for (int i = 0; i < Ndof; ++i)
+        {
+        for (int j = 0; j < h_nn.data[i]; ++j)
+            {
+            int k = h_n.data[activeModel->n_idx(j,i)];
+            tripletList.push_back(T(2*i, 2*k, -xi_rel));
+            tripletList.push_back(T(2*i+1, 2*k+1, -xi_rel));
+            }
+        tripletList.push_back(T(2*i, 2*i, xi_sub + xi_rel*h_nn.data[i]));
+        tripletList.push_back(T(2*i+1, 2*i+1, xi_sub + xi_rel*h_nn.data[i]));
+        }
+    mat.setFromTriplets(tripletList.begin(), tripletList.end());
+    }
+
+/*!
+The straightforward CPU implementation
+*/
+void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionCPU()
+    {
+    Eigen::SparseMatrix<double> frictionMatrix(2*Ndof, 2*Ndof);
+    computeFrictionMatrix(frictionMatrix);
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(frictionMatrix);
+    if (solver.info() != Eigen::Success)
+        {
+        throw std::runtime_error("Matrix decomposition failed in selfPropelledParticleWithSimpleFriction.");
+        }
+    Eigen::VectorXd forces(2*Ndof), v(2*Ndof);
+    activeModel->computeForces();
+
+    {// scope for array handles
+        ArrayHandle<double2> h_f(activeModel->returnForces(),access_location::host,access_mode::read);
+        ArrayHandle<double> h_cd(activeModel->cellDirectors);
+        ArrayHandle<double2> h_v(activeModel->cellVelocities);
+        ArrayHandle<double2> h_disp(displacements,access_location::host,access_mode::overwrite);
+        ArrayHandle<double2> h_motility(activeModel->Motility,access_location::host,access_mode::read);
+
+        for (int ii = 0; ii < Ndof; ++ii)
+            {
+            //displace according to current velocities and forces
+            double f0i = h_motility.data[ii].x;
+            h_v.data[ii].x =  f0i * cos(h_cd.data[ii]);
+            h_v.data[ii].y =  f0i * sin(h_cd.data[ii]);
+            double2 Vcur = h_v.data[ii];
+            forces(2*ii) = Vcur.x + h_f.data[ii].x;
+            forces(2*ii+1) = Vcur.y + h_f.data[ii].y;
+            }
+        v = solver.solve(forces);
+        if (solver.info() != Eigen::Success)
+            {
+            throw std::runtime_error("Matrix solve failed in selfPropelledParticleWithSimpleFriction.");
+            }
+        for (int ii = 0; ii < Ndof; ++ii)
+            { // displace according to current velocities
+            h_disp.data[ii].x = deltaT*v(2*ii);
+            h_disp.data[ii].y = deltaT*v(2*ii+1);
+            // rotate the velocity vector a bit
+            double Dri = h_motility.data[ii].y;
+            double2 Vcur = h_v.data[ii];
+            double theta = h_cd.data[ii];
+            //rotate the velocity vector a bit
+            if (!(Vcur.x == 0. && Vcur.y == 0.))
+                {
+                theta = atan2(Vcur.y,Vcur.x);
+                };
+            double randomNumber = noise.getRealNormal();
+            h_cd.data[ii] =theta+randomNumber*sqrt(2.0*deltaT*Dri);
+            };
+    }// end array handle scoping
+    activeModel->moveDegreesOfFreedom(displacements);
+    activeModel->enforceTopology();
+}
+/*!
+The GPU implementation of the self-propelled particle dynamics with simple friction
+*/
+void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
+    {
+        //empty for now, as the GPU implementation is not yet available
+    }

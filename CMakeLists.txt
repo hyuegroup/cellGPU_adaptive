@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(cellGPU LANGUAGES CXX)
+project(cellGPU LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 #note: CGAL (which I will get rid of someday) needs at least c++14; some advanced gcc compilers will throw errors if you don't set the cpp standard to 17, though
@@ -60,6 +60,7 @@ include_directories(
             inc
             src/utility src/updaters src/simulation
             src/models src/analysis src/databases
+            extensions/updaters
    )
 
 add_subdirectory(src)
@@ -72,6 +73,7 @@ set(myLibs
     databases
     simulation
     utility
+    my_extensions
     )
 list(APPEND myLibs 
     modelGPU
@@ -89,6 +91,7 @@ set(HEADERS
 foreach(ARG
         voronoi
         Vertex
+        voronoi_activeBD_friction
         )
 add_executable("${ARG}.out" "${ARG}.cpp" )
 target_link_libraries("${ARG}.out"
