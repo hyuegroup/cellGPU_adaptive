@@ -9,7 +9,7 @@ class selfPropelledParticleWithSimpleFriction : public selfPropelledParticleDyna
 {
 public:
     // Constructor
-    selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel) : selfPropelledParticleDynamics(_N, false)
+    selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel) : selfPropelledParticleDynamics(_N)
     {
         xi_rel = _xi_rel;
     }
