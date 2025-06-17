@@ -98,5 +98,7 @@ target_link_libraries("${ARG}.out"
     ${myLibs}
     CGAL::CGAL
     OpenMP::OpenMP_CXX
+    ${CUDA_cusolver_LIBRARY}
+    ${CUDA_cusparse_LIBRARY}
     )
 endforeach()

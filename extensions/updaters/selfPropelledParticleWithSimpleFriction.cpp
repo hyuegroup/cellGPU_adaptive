@@ -1,5 +1,5 @@
 #include "selfPropelledParticleWithSimpleFriction.h"
-
+#include "selfPropelledParticleWithSimpleFriction.cuh"
 #include <Eigen/SparseCore>
 #include <Eigen/SparseCholesky>
 
@@ -72,15 +72,10 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionCPU()
             h_disp.data[ii].y = deltaT*v(2*ii+1);
             // rotate the velocity vector a bit
             double Dri = h_motility.data[ii].y;
-            double2 Vcur = h_v.data[ii];
             double theta = h_cd.data[ii];
             //rotate the velocity vector a bit
-            if (!(Vcur.x == 0. && Vcur.y == 0.))
-                {
-                theta = atan2(Vcur.y,Vcur.x);
-                };
             double randomNumber = noise.getRealNormal();
-            h_cd.data[ii] =theta+randomNumber*sqrt(2.0*deltaT*Dri);
+            h_cd.data[ii] = theta + randomNumber*sqrt(2.0*deltaT*Dri);
             };
     }// end array handle scoping
     activeModel->moveDegreesOfFreedom(displacements);
@@ -91,5 +86,30 @@ The GPU implementation of the self-propelled particle dynamics with simple frict
 */
 void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
     {
-        //empty for now, as the GPU implementation is not yet available
+         activeModel->computeForces();
+        {//scope for array Handles
+        ArrayHandle<double2> d_f(activeModel->returnForces(),access_location::device,access_mode::read);
+        ArrayHandle<double> d_cd(activeModel->cellDirectors,access_location::device,access_mode::readwrite);
+        ArrayHandle<double2> d_v(activeModel->cellVelocities,access_location::device,access_mode::readwrite);
+        ArrayHandle<double2> d_disp(displacements,access_location::device,access_mode::overwrite);
+        ArrayHandle<double2> d_motility(activeModel->Motility,access_location::device,access_mode::read);
+        ArrayHandle<curandState> d_RNG(noise.RNGs,access_location::device,access_mode::readwrite);
+        ArrayHandle<int> d_nn(activeModel->neighborNum,access_location::device,access_mode::read);
+        Index2D n_idx = activeModel->n_idx;
+
+        gpu_spp_friction_eom_integration(d_nn.data,d_f.data,
+                    d_v.data,
+                    d_disp.data,
+                    d_motility.data,
+                    d_cd.data,
+                    d_RNG.data,
+                    Ndof,
+                    n_idx,
+                    deltaT,
+                    Timestep,
+                    xi_sub,
+                    xi_rel);
+        };//end array handle scope
+    activeModel->moveDegreesOfFreedom(displacements);
+    activeModel->enforceTopology();
     }

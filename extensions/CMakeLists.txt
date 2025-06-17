@@ -2,6 +2,7 @@
 
 add_library(my_extensions
    updaters/selfPropelledParticleWithSimpleFriction.cpp
+   updaters/selfPropelledParticleWithSimpleFriction.cu
 )
 
 target_include_directories(my_extensions
