@@ -9,10 +9,11 @@ class selfPropelledParticleWithSimpleFriction : public selfPropelledParticleDyna
 {
 public:
     // Constructor
-    selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel) : selfPropelledParticleDynamics(_N)
+    selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel, bool _useGPU = true) 
+        : selfPropelledParticleDynamics{_N, _useGPU}
+        , xi_rel{_xi_rel}
     {
-        xi_rel = _xi_rel;
-    }
+    } 
     // Add public methods and members here
     virtual void integrateEquationsOfMotionCPU(); 
     virtual void integrateEquationsOfMotionGPU();
