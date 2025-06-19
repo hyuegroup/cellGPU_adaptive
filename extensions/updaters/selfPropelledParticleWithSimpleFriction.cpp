@@ -4,7 +4,6 @@
 #include <Eigen/SparseCholesky>
 
 /*! \file selfPropelledParticleWithSimpleFriction.cpp */
-
 void selfPropelledParticleWithSimpleFriction::computeFrictionMatrix(Eigen::SparseMatrix<double> &mat)
     {
     typedef Eigen::Triplet<double> T;
@@ -95,20 +94,31 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
         ArrayHandle<double2> d_motility(activeModel->Motility,access_location::device,access_mode::read);
         ArrayHandle<curandState> d_RNG(noise.RNGs,access_location::device,access_mode::readwrite);
         ArrayHandle<int> d_nn(activeModel->neighborNum,access_location::device,access_mode::read);
+        ArrayHandle<int> d_n(activeModel->neighbors,access_location::device,access_mode::read);
         Index2D n_idx = activeModel->n_idx;
-
-        gpu_spp_friction_eom_integration(d_nn.data,d_f.data,
+        gpu_spp_friction_eom_integration(
+                    d_nn.data,
+                    d_n.data,
+                    d_f.data,
                     d_v.data,
+                    velocity_flat,
+                    totalf_flat,
                     d_disp.data,
                     d_motility.data,
                     d_cd.data,
+                    d_row_ptr,
+                    d_col_idx,
+                    d_values,
+                    d_row_sizes,
                     d_RNG.data,
                     Ndof,
                     n_idx,
                     deltaT,
                     Timestep,
                     xi_sub,
-                    xi_rel);
+                    xi_rel,
+                    handle,
+                    descrA);
         };//end array handle scope
     activeModel->moveDegreesOfFreedom(displacements);
     activeModel->enforceTopology();
