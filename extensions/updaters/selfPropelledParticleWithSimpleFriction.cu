@@ -2,7 +2,6 @@
 #include "curand_kernel.h"
 #include "indexer.h"
 #include "selfPropelledParticleWithSimpleFriction.cuh"
-#include "selfPropelledParticleWithSimpleFriction.h"
 
 // __global__ void double2ToDouble_kernel(
 //     const double2 *input,
@@ -14,24 +13,6 @@
 //     output[2 * idx] = input[idx].x;
 //     output[2 * idx + 1] = input[idx].y;
 // }
-__global__ void doubleToDouble2_kernel(
-    const double *input,
-    double2 *output,
-    int N)
-{
-    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= 2*N) return;
-    int cellIdx = idx / 2; // Determine the cell index
-    int direction = idx % 2; // Determine the direction (0 for x,
-    if (direction == 1) {
-        // y direction
-        output[cellIdx].y = input[idx];
-    } else {
-        // x direction
-        output[cellIdx].x = input[idx];
-    }
-}
-
 __global__ void calculateForces_kernel(
     const double2 *forces,
     const double2 *motility,
@@ -95,7 +76,8 @@ __global__ void spp_friction_eom_integration_kernel(
                                            double2 *displacements,
                                            const double2 *motility,
                                            double *cellDirectors,
-                                           const double2 *velocities,
+                                           double2 *velocities,
+                                            const double *velocity_flat,
                                            curandState *RNGs,
                                            int N,
                                            double deltaT,
@@ -104,6 +86,9 @@ __global__ void spp_friction_eom_integration_kernel(
     unsigned int idx = blockIdx.x*blockDim.x + threadIdx.x;
     if (idx >=N)
         return;
+
+    velocities[idx].x = velocity_flat[2*idx];
+    velocities[idx].y = velocity_flat[2*idx + 1];
     //update displacements
     displacements[idx].x = deltaT*velocities[idx].x;
     displacements[idx].y = deltaT*velocities[idx].y;
@@ -141,6 +126,58 @@ int gpu_computeRowPtr(
     return nnz; // Return the number of non-zero entries
 }
 
+bool gpu_symbolic_solver_phase(
+                    const int *neighborNum,
+                    const int *neighbors,
+                    int *d_row_ptr,
+                    int *d_col_idx,
+                    double *d_values,
+                    int *d_row_sizes,
+                    Index2D n_idx,
+                    int N,
+                    double xi_rel,
+                    cusolverSpHandle_t handle,
+                    cusparseMatDescr_t descrA)
+{
+    int nnz = gpu_computeRowPtr(neighborNum, N, d_row_ptr, d_row_sizes);
+    int blockSize = 128;
+    int nBlocks = (2*N + blockSize - 1) / blockSize;
+    // Build the friction matrix in CSR format
+    buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(neighborNum, 
+        neighbors, 
+        n_idx, 
+        N, 
+        1.0, // xi_sub
+        xi_rel, // xi_rel
+        d_row_ptr, 
+        d_col_idx, 
+        d_values);
+    // Query cusolver for workspace size
+    size_t workspaceSize = 0;
+    cusolverSpDcsrcholBufferInfo(
+                    handle,
+                    2*N,
+                    nnz,
+                    descrA,
+                    nullptr,
+                    d_row_ptr,
+                    d_col_idx,
+                    workspaceSize);
+    // Allocate workspace
+    double *d_workspace = nullptr;
+    cudaMalloc(&d_workspace, workspaceSize);
+    cusolverSpDcsrcholAnalysis(
+    handle,
+    2*N,
+    nnz,
+    descrA,
+    d_row_ptr,
+    d_col_idx,
+    d_workspace,
+    /*info=*/nullptr);
+    return true;
+}
+
 bool gpu_spp_friction_eom_integration(   
                     const int *neighborNum,
                     const int *neighbors,
@@ -165,27 +202,22 @@ bool gpu_spp_friction_eom_integration(
                     cusolverSpHandle_t handle,
                     cusparseMatDescr_t descrA)
 {
-    // int* d_row_ptr;
-    // int* d_col_idx;
-    // double* d_values;
-    // int nrows = 2 * N; // Two directions (x and y)
-    // cudaMalloc(&d_row_ptr, (nrows + 1) * sizeof(int));
-    int nnz = gpu_computeRowPtr(neighborNum, N, d_row_ptr,d_row_sizes);
-    // cudaMalloc(&d_col_idx, nnz * sizeof(int));
-    // cudaMalloc(&d_values, nnz * sizeof(double));
+    // int nnz = gpu_computeRowPtr(neighborNum, N, d_row_ptr,d_row_sizes);
     int blockSize = 128;
     int nBlocks = (2*N + blockSize - 1) / blockSize;
-    // Build the friction matrix in CSR format
-    buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(neighborNum, 
-        neighbors, 
-        n_idx, 
-        N, 
-        xi_sub, 
-        xi_rel, 
-        d_row_ptr, 
-        d_col_idx, 
-        d_values);
+    // // Build the friction matrix in CSR format
+    // buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(neighborNum, 
+    //     neighbors, 
+    //     n_idx, 
+    //     N, 
+    //     xi_sub, 
+    //     xi_rel, 
+    //     d_row_ptr, 
+    //     d_col_idx, 
+    //     d_values);
     // calculate the total forces vector
+
+    // This kernel calculates the total forces vector based on motility and cell directors
     calculateForces_kernel<<<nBlocks, blockSize>>>(
         forces,
         motility,
@@ -194,14 +226,6 @@ bool gpu_spp_friction_eom_integration(
         N
     );
     // solve the linear system Ax=b using the cusolver
-    // CuSolverHandle handle;
-    // cusolverSpCreate(&handle);
-    // cusparseMatDescr_t descrA;
-    // cusparseCreateMatDescr(&descrA);
-    // cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_SYMMETRIC);
-    // cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO);
-    // cusparseSetMatDiagType(descrA, CUSPARSE_DIAG_TYPE_NON_UNIT);
-    // cusparseSetMatFillMode(descrA, CUSPARSE_FILL_MODE_LOWER);
     int singularity = 0;
     cusolverStatus_t solve_status = cusolverSpDcsrlsvchol(
         handle, 
@@ -225,12 +249,6 @@ bool gpu_spp_friction_eom_integration(
     } else {
     // std::cout << "cusolverSpDcsrlsvchol returned CUSOLVER_STATUS_SUCCESS." << handle << std::endl;
     }
-    // Convert the flat displacements back to double2 format
-    doubleToDouble2_kernel<<<nBlocks, blockSize>>>(
-        velocity_flat,
-        velocities,
-        N
-    );
 
     // integration and update
     nBlocks = (2*N + blockSize - 1) / blockSize;
@@ -239,6 +257,7 @@ bool gpu_spp_friction_eom_integration(
         motility,
         cellDirectors,
         velocities,
+        velocity_flat,
         RNGs,
         N,
         deltaT,

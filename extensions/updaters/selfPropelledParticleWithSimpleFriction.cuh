@@ -31,4 +31,17 @@ bool gpu_spp_friction_eom_integration(
                     double xi_rel,
                     cusolverSpHandle_t handle,
                     cusparseMatDescr_t descrA);
+
+bool gpu_symbolic_solver_phase(
+                    const int *neighborNum,
+                    const int *neighbors,
+                    int *d_row_ptr,
+                    int *d_col_ind,
+                    double *d_values,
+                    int *d_row_sizes,
+                    Index2D n_idx,
+                    int N,
+                    double xi_rel,
+                    cusolverSpHandle_t handle,
+                    cusparseMatDescr_t descrA);
 #endif // SELF_PROPELLED_PARTICLE_WITH_SIMPLE_FRICTION_CUH
