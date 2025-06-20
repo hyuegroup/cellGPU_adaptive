@@ -18,28 +18,7 @@ class selfPropelledParticleWithSimpleFriction : public selfPropelledParticleDyna
 {
 public:
     // Constructor
-    selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel = 1.0, bool _useGPU = true) 
-        : selfPropelledParticleDynamics{_N, _useGPU}
-        , xi_rel{_xi_rel}
-    {
-        int maxRows = 2 * _N;
-        int maxNnz = 7 * maxRows; // Maximum non-zero entries in the friction matrix
-        // Allocate memory for the sparse matrix representation on the device
-        cudaMalloc(&d_row_ptr, (maxRows + 1) * sizeof(int));
-        cudaMemset(d_row_ptr, 0, sizeof(int));
-        cudaMalloc(&d_col_idx, maxNnz * sizeof(int));
-        cudaMalloc(&d_values, maxNnz * sizeof(double));
-        cudaMalloc(&velocity_flat, maxRows * sizeof(double));
-        cudaMalloc(&totalf_flat,  maxRows * sizeof(double));
-        cudaMalloc(&d_row_sizes,  maxRows * sizeof(int));
-        // create and initialize cuSolver/cuSparse handles
-        cusolverStatus_t cusolver_status = cusolverSpCreate(&handle);
-        cusparseCreateMatDescr(&descrA);
-        cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL);
-        cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO);
-        // cusparseSetMatDiagType(descrA, CUSPARSE_DIAG_TYPE_NON_UNIT);
-        // cusparseSetMatFillMode(descrA, CUSPARSE_FILL_MODE_LOWER);
-    } 
+    selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel = 1.0, bool _useGPU = true);
     ~selfPropelledParticleWithSimpleFriction() 
     {
         if(d_row_ptr) cudaFree(d_row_ptr);
@@ -67,6 +46,7 @@ protected:
     double *totalf_flat = nullptr; // Flattened total force array for GPU
     double xi_rel; // Relative friction coefficient
     double xi_sub = 1.; // Substrate Friction coefficient
+    std::vector<int> old_nn, old_neigh; // Old neighbor numbers and neighbors
     cusolverSpHandle_t handle = nullptr; // cuSolver handle
     cusparseMatDescr_t descrA = nullptr; // cuSparse matrix descriptor
 };
