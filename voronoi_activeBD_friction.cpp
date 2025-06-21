@@ -26,14 +26,15 @@ double benchmark(int N, int use_gpu)
     int USE_GPU = use_gpu; //0 or greater uses a gpu, any negative number runs on the cpu
     int c;
     int tSteps = 1000; //number of time steps to run after initialization
+    int initSteps = 100; //number of time steps to run for initialization
     int idx = 0;   //repeated ensemble no. 
 
     double dt = 0.01; //the time step size
-    double p0 = 3.7;  //the preferred perimeter
+    double p0 = 3.8;  //the preferred perimeter
     double a0 = 1.0;  // the preferred area
     double v0 = 0.01;  // the velocity
     double Dr = 1;    // the diffusivity
-
+    double elapsed_ms = 0.0; //the elapsed time in milliseconds
     clock_t t1,t2; //clocks for timing information
     bool reproducible = false; // if you want random numbers with a more random seed each run, set this to false
     //check to see if we should run on a GPU
@@ -41,7 +42,8 @@ double benchmark(int N, int use_gpu)
     bool gpu = chooseGPU(USE_GPU);
     if (!gpu)
         initializeGPU = false;
-    shared_ptr<selfPropelledParticleWithSimpleFriction> spp = make_shared<selfPropelledParticleWithSimpleFriction>(numpts,1.0);
+    { // scope to ensure that all shared pointers are destroyed before cudaDeviceReset()
+    shared_ptr<selfPropelledParticleWithSimpleFriction> spp = make_shared<selfPropelledParticleWithSimpleFriction>(numpts,1.0,initializeGPU);
 
     //define a voronoi configuration with a quadratic energy functional
     shared_ptr<VoronoiQuadraticEnergy> voronoiModel  = make_shared<VoronoiQuadraticEnergy>(numpts,1.0,4.0,reproducible,initializeGPU);
@@ -65,40 +67,47 @@ double benchmark(int N, int use_gpu)
     sim->setReproducible(reproducible);
 
     //run for additional timesteps, compute dynamical features, and record timing information
+    if (initializeGPU)
+        cudaDeviceSynchronize();
     auto start = std::chrono::high_resolution_clock::now();
     for(long long int ii = 0; ii <= tSteps; ++ii)
         {
         sim->performTimestep();
         };
+     if (initializeGPU)
+        cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
-    double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+    elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+    }
     if(initializeGPU)
         cudaDeviceReset();
     return elapsed_ms / tSteps; //return the average time per step in milliseconds
 };
 
-int main()
+int main(int argc, char* argv[])
 {
-    std::vector<int> N{2000,2000,4000,8000,16000};
-    std::vector<double> timePerStep_cpu(5);
-    std::vector<double> timePerStep_gpu(5);
-    for (int i= 0; i < 5; ++i)
+    if (argc != 2)
     {
-        timePerStep_cpu[i]=benchmark(N[i],-1); //run on the CPU
-        timePerStep_gpu[i]=benchmark(N[i],0);  //run on the GPU
-        cudaDeviceReset();
-        cout << "N = " << N[i] << ", CPU time per step = " << timePerStep_cpu[i] << " ms, GPU time per step = " << timePerStep_gpu[i] << " ms" << endl;
+        cerr << "Usage: " << argv[0] << " <N>" << endl;
+        return 1;
     }
-    ofstream File("timePerStep.txt");
+
+    int N = atoi(argv[1]);
+
+    double timePerStep_cpu=0.0;
+    double timePerStep_gpu=0.0;
+    cout << "Running benchmark for N = " << N << endl;
+    timePerStep_cpu=benchmark(N,-1); //run on the CPU
+    cout << "N = " << N << ", CPU time per step = " << timePerStep_cpu << " ms" << endl;
+    timePerStep_gpu=benchmark(N,0);  //run on the GPU
+    cout << "N = " << N << ", GPU time per step = " << timePerStep_gpu << " ms" << endl;
+    ofstream File("timePerStep.txt",std::ios::app);
     if (!File.is_open())
     {
         cerr << "Error opening file for writing!" << endl;
         return 1;
     }  
-    for (int i = 0; i < 5; ++i)
-    {
-        File << N[i] << "\t" << timePerStep_cpu[i] << "\t" << timePerStep_gpu[i] << endl;
-    }
+    File << N << "\t" << timePerStep_cpu << "\t" << timePerStep_gpu << endl;
     File.close();
     return 1;
 }

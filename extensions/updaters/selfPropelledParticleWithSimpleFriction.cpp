@@ -6,41 +6,57 @@
 /*! \file selfPropelledParticleWithSimpleFriction.cpp */
 selfPropelledParticleWithSimpleFriction::selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel, bool _useGPU) 
         : selfPropelledParticleDynamics{_N, _useGPU}
-        , xi_rel{_xi_rel}
+        , xi_rel{_xi_rel}, nnz{7*2*_N}   //#TODO: is this format of initialize nnz correct? 
     {
+        // nnz = 7 * maxRows; // number of non-zero entries in the friction matrix
+        if (_useGPU)
+        {
         int maxRows = 2 * _N;
-        int maxNnz = 7 * maxRows; // Maximum non-zero entries in the friction matrix
-        // Allocate memory for the sparse matrix representation on the device
+            // Allocate memory for the sparse matrix representation on the device
         cudaMalloc(&d_row_ptr, (maxRows + 1) * sizeof(int));
         cudaMemset(d_row_ptr, 0, sizeof(int));
-        cudaMalloc(&d_col_idx, maxNnz * sizeof(int));
-        cudaMalloc(&d_values, maxNnz * sizeof(double));
+        cudaMalloc(&d_col_idx, nnz * sizeof(int));
+        cudaMalloc(&d_values, nnz * sizeof(double));
         cudaMalloc(&velocity_flat, maxRows * sizeof(double));
         cudaMalloc(&totalf_flat,  maxRows * sizeof(double));
         cudaMalloc(&d_row_sizes,  maxRows * sizeof(int));
-        // create and initialize cuSolver/cuSparse handles
-        cusolverStatus_t cusolver_status = cusolverSpCreate(&handle);
-        cusparseCreateMatDescr(&descrA);
-        cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL);
-        cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO);
-        ArrayHandle<int> h_nn(activeModel->neighborNum, access_location::host, access_mode::read);
-        ArrayHandle<int> h_n(activeModel->neighbors, access_location::host, access_mode::read);
-        old_nn.assign(h_nn.data, h_nn.data + activeModel->neighborNum.getNumElements());
-        old_neigh.assign(h_n.data, h_n.data + activeModel->neighbors.getNumElements());
+        // create and initialize cudss structures
+        cudssCreate(&handle);
+        cudssConfigCreate(&config);
+        cudssDataCreate(handle,&data);
+        cudssMatrixCreateCsr( 
+            &A,
+            /*rows=*/2*_N,
+            /*cols=*/2*_N,
+            /*nnz=*/nnz,
+            d_row_ptr,
+            NULL,
+            d_col_idx,
+            d_values,
+            CUDA_R_32I,    // index type
+            CUDA_R_64F, // value type
+            CUDSS_MTYPE_SPD, // Matrix type  symmetric positive definite
+            CUDSS_MVIEW_FULL, //Matrix view type
+            CUDSS_BASE_ZERO
+        ); 
+        cudssMatrixCreateDn( 
+            &b, 
+            /*rows=*/2*Ndof,
+            /*cols=*/1,
+            /*leading dimension*/2*Ndof,
+            totalf_flat,
+            CUDA_R_64F,  //value type
+            CUDSS_LAYOUT_COL_MAJOR);
+        cudssMatrixCreateDn(   
+            &x,
+            /*rows=*/2*Ndof,
+            /*cols=*/1,
+            /*leading dimension*/2*Ndof,
+            velocity_flat,
+            CUDA_R_64F,  //value type
+            CUDSS_LAYOUT_COL_MAJOR);
         Index2D n_idx = activeModel->n_idx;
-        gpu_symbolic_solver_phase(h_nn.data,
-                                  h_n.data,
-                                  d_row_ptr,
-                                  d_col_idx,
-                                  d_values,
-                                  d_row_sizes,
-                                  n_idx,
-                                  _N, 
-                                  xi_rel, 
-                                  handle, 
-                                  descrA
-        );
-        
+        }
     } 
 
 
@@ -133,36 +149,17 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
         ArrayHandle<double2> d_disp(displacements,access_location::device,access_mode::overwrite);
         ArrayHandle<double2> d_motility(activeModel->Motility,access_location::device,access_mode::read);
         ArrayHandle<curandState> d_RNG(noise.RNGs,access_location::device,access_mode::readwrite);
-        ArrayHandle<int> d_nn(activeModel->neighborNum,access_location::device,access_mode::read);
-        ArrayHandle<int> d_n(activeModel->neighbors,access_location::device,access_mode::read);
-        ArrayHandle<int> h_nn(activeModel->neighborNum,access_location::host,access_mode::read);
-        ArrayHandle<int> h_n(activeModel->neighbors,access_location::host,access_mode::read);
+        // ArrayHandle<int> d_nn(activeModel->neighborNum,access_location::device,access_mode::read);
+        // ArrayHandle<int> d_n(activeModel->neighbors,access_location::device,access_mode::read);
+        // ArrayHandle<int> h_nn(activeModel->neighborNum,access_location::host,access_mode::read);
+        // ArrayHandle<int> h_n(activeModel->neighbors,access_location::host,access_mode::read);
         Index2D n_idx = activeModel->n_idx;
-        if (std::equal(old_nn.begin(), old_nn.end(), h_nn.data) ||
-            std::equal(old_neigh.begin(), old_neigh.end(), h_n.data))
-            {
-            // No need to recompute the friction matrix if neighbors haven't changed
-            }
-        else
-            {
-            // Recompute the friction matrix if neighbors have changed
-            gpu_symbolic_solver_phase(d_nn.data,
-                                      d_n.data,
-                                      d_row_ptr,
-                                      d_col_idx,
-                                      d_values,
-                                      d_row_sizes,
-                                      n_idx,
-                                      Ndof, 
-                                      xi_rel, 
-                                      handle, 
-                                      descrA);
-            old_nn.assign(h_nn.data, h_nn.data + activeModel->neighborNum.getNumElements());
-            old_neigh.assign(h_n.data, h_n.data + activeModel->neighbors.getNumElements());
-            }
         gpu_spp_friction_eom_integration(
-                    d_nn.data,
-                    d_n.data,
+                    activeModel->neighborNum,
+                    activeModel->neighbors,
+                    old_nn,
+                    old_n,
+                    nnz,
                     d_f.data,
                     d_v.data,
                     velocity_flat,
@@ -182,7 +179,11 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
                     xi_sub,
                     xi_rel,
                     handle,
-                    descrA);
+                    config,
+                    data,
+                    A,
+                    b,
+                    x);
         };//end array handle scope
     activeModel->moveDegreesOfFreedom(displacements);
     activeModel->enforceTopology();

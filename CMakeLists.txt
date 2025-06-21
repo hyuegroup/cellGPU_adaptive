@@ -66,6 +66,14 @@ include_directories(
 add_subdirectory(src)
 add_subdirectory(extensions)
 
+find_library(CUDSS_LIB cudss
+             PATHS /usr/lib /usr/lib/x86_64-linux-gnu
+             NO_DEFAULT_PATH)
+
+if (NOT CUDSS_LIB)
+  message(FATAL_ERROR "Could not find libcudss (cudss)")
+endif()
+
 set(myLibs
     model
     updaters
@@ -98,7 +106,6 @@ target_link_libraries("${ARG}.out"
     ${myLibs}
     CGAL::CGAL
     OpenMP::OpenMP_CXX
-    ${CUDA_cusolver_LIBRARY}
-    ${CUDA_cusparse_LIBRARY}
+    ${CUDSS_LIB}
     )
 endforeach()

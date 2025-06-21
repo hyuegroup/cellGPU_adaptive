@@ -9,8 +9,11 @@ int gpu_computeRowPtr(
                     int N,
                     int* d_row_ptr);
 bool gpu_spp_friction_eom_integration(
-                    const int *neighborNum,
-                    const int *neighbors,
+                    const GPUArray<int>& neighborNum,  
+                    const GPUArray<int>& neighbors,
+                    std::vector<int>& old_nn,
+                    std::vector<int>& old_n,
+                    int nnz,
                     const double2 *forces,
                     double2 *velocities,
                     double *velocity_flat,
@@ -29,19 +32,10 @@ bool gpu_spp_friction_eom_integration(
                     int Timestep,
                     double xi_sub,
                     double xi_rel,
-                    cusolverSpHandle_t handle,
-                    cusparseMatDescr_t descrA);
-
-bool gpu_symbolic_solver_phase(
-                    const int *neighborNum,
-                    const int *neighbors,
-                    int *d_row_ptr,
-                    int *d_col_ind,
-                    double *d_values,
-                    int *d_row_sizes,
-                    Index2D n_idx,
-                    int N,
-                    double xi_rel,
-                    cusolverSpHandle_t handle,
-                    cusparseMatDescr_t descrA);
+                    cudssHandle_t handle,
+                    cudssConfig_t config,
+                    cudssData_t data,
+                    cudssMatrix_t A,
+                    cudssMatrix_t b,
+                    cudssMatrix_t x);
 #endif // SELF_PROPELLED_PARTICLE_WITH_SIMPLE_FRICTION_CUH
