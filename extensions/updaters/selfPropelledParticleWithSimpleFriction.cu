@@ -43,15 +43,15 @@ __global__ void fillRowSize_kernel(int *row_sizes, const int *d_nn, int N)
 
 
 __global__ void buildFrictionMatrixCSR_kernel(
-    const int* __restrict__ neighborNum,
-    const int* __restrict__ neighbors,
+    const int* neighborNum,
+    const int* neighbors,
     Index2D n_idx,
     int N,
     double xi_sub,
     double xi_rel,
-    int* __restrict__ row_ptr,
-    int* __restrict__ col_idx,
-    double* __restrict__ values)
+    int* row_ptr,
+    int* col_idx,
+    double* values)
 {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= 2*N) return;
@@ -126,61 +126,14 @@ int gpu_computeRowPtr(
     return nnz; // Return the number of non-zero entries
 }
 
-bool gpu_symbolic_solver_phase(
-                    const int *neighborNum,
-                    const int *neighbors,
-                    int *d_row_ptr,
-                    int *d_col_idx,
-                    double *d_values,
-                    int *d_row_sizes,
-                    Index2D n_idx,
-                    int N,
-                    double xi_rel,
-                    cusolverSpHandle_t handle,
-                    cusparseMatDescr_t descrA)
-{
-    int nnz = gpu_computeRowPtr(neighborNum, N, d_row_ptr, d_row_sizes);
-    int blockSize = 128;
-    int nBlocks = (2*N + blockSize - 1) / blockSize;
-    // Build the friction matrix in CSR format
-    buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(neighborNum, 
-        neighbors, 
-        n_idx, 
-        N, 
-        1.0, // xi_sub
-        xi_rel, // xi_rel
-        d_row_ptr, 
-        d_col_idx, 
-        d_values);
-    // Query cusolver for workspace size
-    size_t workspaceSize = 0;
-    cusolverSpDcsrcholBufferInfo(
-                    handle,
-                    2*N,
-                    nnz,
-                    descrA,
-                    nullptr,
-                    d_row_ptr,
-                    d_col_idx,
-                    workspaceSize);
-    // Allocate workspace
-    double *d_workspace = nullptr;
-    cudaMalloc(&d_workspace, workspaceSize);
-    cusolverSpDcsrcholAnalysis(
-    handle,
-    2*N,
-    nnz,
-    descrA,
-    d_row_ptr,
-    d_col_idx,
-    d_workspace,
-    /*info=*/nullptr);
-    return true;
-}
-
 bool gpu_spp_friction_eom_integration(   
-                    const int *neighborNum,
-                    const int *neighbors,
+                    const GPUArray<int>& neighborNum,   //TODO: change to gpu array, change to name d_nn and d_n. 
+                    const GPUArray<int>& neighbors,
+                    // const GPUArray<int> &h_nn,
+                    // const GPUArray<int> &h_n,
+                    std::vector<int>& old_nn,
+                    std::vector<int>& old_n,
+                    int nnz,
                     const double2 *forces,
                     double2 *velocities,
                     double *velocity_flat,
@@ -199,59 +152,92 @@ bool gpu_spp_friction_eom_integration(
                     int Timestep,
                     double xi_sub,
                     double xi_rel,
-                    cusolverSpHandle_t handle,
-                    cusparseMatDescr_t descrA)
+                    cudssHandle_t handle,
+                    cudssConfig_t config,
+                    cudssData_t data,
+                    cudssMatrix_t A,
+                    cudssMatrix_t b,
+                    cudssMatrix_t x)
 {
-    // int nnz = gpu_computeRowPtr(neighborNum, N, d_row_ptr,d_row_sizes);
     int blockSize = 128;
     int nBlocks = (2*N + blockSize - 1) / blockSize;
-    // // Build the friction matrix in CSR format
-    // buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(neighborNum, 
-    //     neighbors, 
-    //     n_idx, 
-    //     N, 
-    //     xi_sub, 
-    //     xi_rel, 
-    //     d_row_ptr, 
-    //     d_col_idx, 
-    //     d_values);
-    // calculate the total forces vector
-
-    // This kernel calculates the total forces vector based on motility and cell directors
-    calculateForces_kernel<<<nBlocks, blockSize>>>(
-        forces,
-        motility,
-        cellDirectors,
-        totalf_flat,
-        N
-    );
-    // solve the linear system Ax=b using the cusolver
-    int singularity = 0;
-    cusolverStatus_t solve_status = cusolverSpDcsrlsvchol(
-        handle, 
-        2*N,
-        nnz, 
-        descrA,
-        d_values,
-        d_row_ptr,
-        d_col_idx,
-        totalf_flat, // b vector
-        1e-12, // tolerance
-        0, // reorder
-        velocity_flat, // output velocity_flat
-        &singularity);
-    if (solve_status != CUSOLVER_STATUS_SUCCESS) {
-    std::cerr << "ERROR: cusolverSpDcsrlsvchol failed with status: " << solve_status << std::endl;
-    // Depending on the error, you might want to consider the handle invalid here.
-    // For example, if solve_status indicates an internal error,
-    // you might set a flag to skip cusolverSpDestroy.
-    // Or re-create the handle if this function is called repeatedly.
-    } else {
-    // std::cout << "cusolverSpDcsrlsvchol returned CUSOLVER_STATUS_SUCCESS." << handle << std::endl;
-    }
-
+    ArrayHandle<int> h_nn(neighborNum,access_location::host,access_mode::read);
+    ArrayHandle<int> h_n(neighbors,access_location::host,access_mode::read);
+    ArrayHandle<int> d_nn(neighborNum,access_location::device,access_mode::read);
+    ArrayHandle<int> d_n(neighbors,access_location::device,access_mode::read);
+    if (std::equal(old_nn.begin(), old_nn.end(), h_nn.data) &&
+        std::equal(old_n.begin(), old_n.end(), h_n.data))
+        {
+        // No need to recompute the friction matrix and redo the symbolic analysis if neighbors haven't changed
+        }
+    else
+        {
+        int nnz_check = gpu_computeRowPtr(d_nn.data, N, d_row_ptr,d_row_sizes);
+        if (nnz_check != nnz)
+        {
+            cout << "nnz changes from " << nnz << "to" << nnz_check <<endl;
+            nnz = nnz_check;
+            //resize the related things
+            cudaMalloc(&d_col_idx, nnz * sizeof(int));
+            cudaMalloc(&d_values, nnz * sizeof(double));
+            cudssMatrixCreateCsr(
+                &A,
+                /*rows=*/2*N,
+                /*cols=*/2*N,
+                /*nnz=*/nnz,
+                d_row_ptr,
+                NULL,
+                d_col_idx,
+                d_values,
+                CUDA_R_32I,    // index type
+                CUDA_R_64F, // value type
+                CUDSS_MTYPE_SPD, // Matrix type  symmetric positive definite
+                CUDSS_MVIEW_FULL, //Matrix view type
+                CUDSS_BASE_ZERO); // value type
+        }
+        // Recompute the friction matrix if neighbors have changed
+        buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(
+            d_nn.data, 
+            d_n.data, 
+            n_idx, 
+            N, 
+            xi_sub, 
+            xi_rel, 
+            d_row_ptr, 
+            d_col_idx, 
+            d_values);
+        // Symbolic analysis (pattern only)
+        cudssExecute(handle,
+             CUDSS_PHASE_ANALYSIS,
+             config,
+             data,
+             A, x, b);
+        // update the old_nn and old_n for next step 
+        old_nn.assign(h_nn.data,h_nn.data+N);
+        old_n.assign(h_n.data,h_n.data+neighbors.getNumElements());  //#TODO: check on this. 
+        }
+    // calculate the total forces vector, which automatically update b
+        calculateForces_kernel<<<nBlocks, blockSize>>>(
+            forces,
+            motility,
+            cellDirectors,
+            totalf_flat,
+            N
+        );
+    // Numeric factorization
+    cudssExecute(handle,
+             CUDSS_PHASE_FACTORIZATION,
+             config,
+             data,
+             A, x, b);
+    // Solve
+    cudssExecute(handle,
+             CUDSS_PHASE_SOLVE,
+             config,
+             data,
+             A, x, b);
     // integration and update
-    nBlocks = (2*N + blockSize - 1) / blockSize;
+    nBlocks = (N + blockSize - 1) / blockSize;
     spp_friction_eom_integration_kernel<<<nBlocks, blockSize>>>(
         displacements,
         motility,
