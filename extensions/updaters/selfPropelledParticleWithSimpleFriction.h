@@ -27,6 +27,9 @@ public:
         if(velocity_flat) cudaFree(velocity_flat);
         if(totalf_flat) cudaFree(totalf_flat);
         if(d_row_sizes) cudaFree(d_row_sizes);
+        if(d_neigh_change) cudaFree(d_neigh_change);
+        if(old_nn) cudaFree(old_nn);
+        if(old_n) cudaFree(old_n);
         cudssMatrixDestroy(A);
         cudssMatrixDestroy(x);
         cudssMatrixDestroy(b);
@@ -42,6 +45,7 @@ public:
 protected:
     // Add protected members here
     virtual void computeFrictionMatrix(Eigen::SparseMatrix<double> &mat);
+    int *d_neigh_change;
     int *d_row_sizes = nullptr; // Row sizes for sparse matrix
     int *d_row_ptr = nullptr; // Row pointer for sparse matrix
     int *d_col_idx = nullptr; // Column indices for sparse matrix
@@ -51,8 +55,10 @@ protected:
     double *totalf_flat = nullptr; // Flattened total force array for GPU
     double xi_rel; // Relative friction coefficient
     double xi_sub = 1.; // Substrate Friction coefficient
-    std::vector<int> old_nn {0};
-    std::vector<int> old_n {0}; // Old neighbor numbers and neighbors
+    // std::vector<int> old_nn;
+    // std::vector<int> old_n; // Old neighbor numbers and neighbors
+    int *old_nn;
+    int *old_n;
     cudssHandle_t handle; // cudss handle
     cudssConfig_t config; // cudss configuratio
     cudssData_t data; // cudss data

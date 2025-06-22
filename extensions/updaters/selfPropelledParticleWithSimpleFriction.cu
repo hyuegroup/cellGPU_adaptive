@@ -3,48 +3,66 @@
 #include "indexer.h"
 #include "selfPropelledParticleWithSimpleFriction.cuh"
 
-// __global__ void double2ToDouble_kernel(
-//     const double2 *input,
-//     double *output,
-//     int N)
-// {
-//     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
-//     if (idx >= N) return;
-//     output[2 * idx] = input[idx].x;
-//     output[2 * idx + 1] = input[idx].y;
-// }
+__global__ void checkNeighborChange_kernel(
+    int* old_nn,
+    int* old_n,
+    const int* __restrict__ new_nn,
+    const int* __restrict__ new_n,
+    Index2D n_idx,
+    int N,
+    int* changed)
+{
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) return;
+
+    if (old_nn[idx] != new_nn[idx]) {
+        atomicExch(changed, 1);
+        //*changed = 1;
+        old_nn[idx] = new_nn[idx];
+        // return;
+    }
+
+    int nn = new_nn[idx];
+    for (int k = 0; k < nn; ++k) {
+        if (old_n[n_idx(k, idx)] != new_n[n_idx(k, idx)]) {
+            atomicExch(changed, 1);
+            //*changed = 1;
+            old_n[n_idx(k, idx)] = new_n[n_idx(k, idx)];
+            // return;
+        }
+    }
+}
+
 __global__ void calculateForces_kernel(
-    const double2 *forces,
-    const double2 *motility,
-    const double *cellDirectors,
+    const double2 * __restrict__ forces,
+    const double2 * __restrict__ motility,
+    const double * __restrict__ cellDirectors,
     double *totalf_flat,
     int N)
 {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= 2*N) return;
-    int cellIdx = idx / 2; // Determine the cell index
-    int direction = idx % 2; // Determine the direction (0 for x, 1 for y)
+    if (idx >= N) return;
     // Calculate the velocity vector based on motility and cell director
-    double v0 = motility[cellIdx].x;
-    if (direction == 1) {
-        totalf_flat[idx] = v0 * sin(cellDirectors[cellIdx]) + forces[cellIdx].y;
-    } else {
-        totalf_flat[idx] = v0 * cos(cellDirectors[cellIdx]) + forces[cellIdx].x;
-    }
+    double v0 = motility[idx].x;
+    double cosValue;
+    double sinValue;
+    sincos(cellDirectors[idx],&sinValue,&cosValue);
+    totalf_flat[2*idx] = v0 * cosValue + forces[idx].x;
+    totalf_flat[2*idx+1] = v0 * sinValue + forces[idx].y;
 }
 
-__global__ void fillRowSize_kernel(int *row_sizes, const int *d_nn, int N)
+__global__ void fillRowSize_kernel(int *row_sizes, const int * __restrict__ d_nn, int N)
 {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= 2*N) return;
     int cellidx = i / 2; // Determine the cell index
-    row_sizes[i] = d_nn[cellidx] + 1; // x direction
+    row_sizes[i] = d_nn[cellidx] + 1; // both x and y direction
 }
 
 
 __global__ void buildFrictionMatrixCSR_kernel(
-    const int* neighborNum,
-    const int* neighbors,
+    const int* __restrict__ neighborNum,
+    const int* __restrict__ neighbors,
     Index2D n_idx,
     int N,
     double xi_sub,
@@ -74,10 +92,10 @@ __global__ void buildFrictionMatrixCSR_kernel(
 
 __global__ void spp_friction_eom_integration_kernel(
                                            double2 *displacements,
-                                           const double2 *motility,
+                                           const double2 * __restrict__ motility,
                                            double *cellDirectors,
                                            double2 *velocities,
-                                            const double *velocity_flat,
+                                           const double * __restrict__ velocity_flat,
                                            curandState *RNGs,
                                            int N,
                                            double deltaT,
@@ -103,7 +121,10 @@ __global__ void spp_friction_eom_integration_kernel(
     double tempTheta = cellDirectors[idx];
     // ensure that the angle is between -pi and pi
     tempTheta += angleDiff;
-    tempTheta = fmod(tempTheta + M_PI, 2 * M_PI) - M_PI; // Normalize to [-pi, pi]
+    if (tempTheta > M_PI)   // Normalize to [-pi, pi]
+        tempTheta-=2*M_PI; 
+    else if (tempTheta < M_PI) 
+        tempTheta+=2*M_PI; 
     // update the cell director
     cellDirectors[idx] = tempTheta;
     return;
@@ -117,7 +138,7 @@ int gpu_computeRowPtr(
 {
     // Calculate the row sizes
     int nrows = 2 * N; // Two directions (x and y)
-    int blockSize = 128;
+    int blockSize = 256;
     int nBlocks = (nrows + blockSize - 1) / blockSize;
     fillRowSize_kernel<<<nBlocks, blockSize>>>(d_row_sizes, d_nn, N);
     // Do inclusive scan using Thrust to get row_ptr
@@ -127,12 +148,10 @@ int gpu_computeRowPtr(
 }
 
 bool gpu_spp_friction_eom_integration(   
-                    const GPUArray<int>& neighborNum,   //TODO: change to gpu array, change to name d_nn and d_n. 
-                    const GPUArray<int>& neighbors,
-                    // const GPUArray<int> &h_nn,
-                    // const GPUArray<int> &h_n,
-                    std::vector<int>& old_nn,
-                    std::vector<int>& old_n,
+                    int* new_nn,
+                    int* new_n,
+                    int* old_nn,
+                    int* old_n,
                     int nnz,
                     const double2 *forces,
                     double2 *velocities,
@@ -157,22 +176,23 @@ bool gpu_spp_friction_eom_integration(
                     cudssData_t data,
                     cudssMatrix_t A,
                     cudssMatrix_t b,
-                    cudssMatrix_t x)
+                    cudssMatrix_t x,
+                    int* d_neigh_change)
 {
     int blockSize = 128;
-    int nBlocks = (2*N + blockSize - 1) / blockSize;
-    ArrayHandle<int> h_nn(neighborNum,access_location::host,access_mode::read);
-    ArrayHandle<int> h_n(neighbors,access_location::host,access_mode::read);
-    ArrayHandle<int> d_nn(neighborNum,access_location::device,access_mode::read);
-    ArrayHandle<int> d_n(neighbors,access_location::device,access_mode::read);
-    if (std::equal(old_nn.begin(), old_nn.end(), h_nn.data) &&
-        std::equal(old_n.begin(), old_n.end(), h_n.data))
+    int nBlocks = (N + blockSize - 1) / blockSize;
+    // check neighbor change
+    cudaMemset(d_neigh_change, 0, sizeof(int));
+    checkNeighborChange_kernel<<<nBlocks,blockSize>>>(old_nn,old_n,new_nn,new_n,n_idx,N,d_neigh_change);
+    int h_neigh_change = 0;
+    cudaMemcpy(&h_neigh_change, d_neigh_change, sizeof(int), cudaMemcpyDeviceToHost);
+    if (h_neigh_change==0)
         {
         // No need to recompute the friction matrix and redo the symbolic analysis if neighbors haven't changed
         }
     else
         {
-        int nnz_check = gpu_computeRowPtr(d_nn.data, N, d_row_ptr,d_row_sizes);
+        int nnz_check = gpu_computeRowPtr(new_nn, N, d_row_ptr,d_row_sizes);
         if (nnz_check != nnz)
         {
             cout << "nnz changes from " << nnz << "to" << nnz_check <<endl;
@@ -196,9 +216,10 @@ bool gpu_spp_friction_eom_integration(
                 CUDSS_BASE_ZERO); // value type
         }
         // Recompute the friction matrix if neighbors have changed
+        nBlocks = (2*N + blockSize - 1) / blockSize;
         buildFrictionMatrixCSR_kernel<<<nBlocks, blockSize>>>(
-            d_nn.data, 
-            d_n.data, 
+            new_nn, 
+            new_n, 
             n_idx, 
             N, 
             xi_sub, 
@@ -213,10 +234,11 @@ bool gpu_spp_friction_eom_integration(
              data,
              A, x, b);
         // update the old_nn and old_n for next step 
-        old_nn.assign(h_nn.data,h_nn.data+N);
-        old_n.assign(h_n.data,h_n.data+neighbors.getNumElements());  //#TODO: check on this. 
+        // old_nn.assign(h_nn.data,h_nn.data+N);
+        // old_n.assign(h_n.data,h_n.data+neighbors.getNumElements()); 
         }
     // calculate the total forces vector, which automatically update b
+        nBlocks = (N + blockSize - 1) / blockSize;
         calculateForces_kernel<<<nBlocks, blockSize>>>(
             forces,
             motility,
