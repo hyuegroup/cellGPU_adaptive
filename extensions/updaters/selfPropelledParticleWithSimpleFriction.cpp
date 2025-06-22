@@ -113,11 +113,8 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionCPU()
             {
             //displace according to current velocities and forces
             double f0i = h_motility.data[ii].x;
-            h_v.data[ii].x =  f0i * cos(h_cd.data[ii]);   //#TODO: change the velocity to full velocity instead of active velocity. 
-            h_v.data[ii].y =  f0i * sin(h_cd.data[ii]);
-            double2 Vcur = h_v.data[ii];
-            forces(2*ii) = Vcur.x + h_f.data[ii].x;
-            forces(2*ii+1) = Vcur.y + h_f.data[ii].y;
+            forces(2*ii) = f0i * cos(h_cd.data[ii]) + h_f.data[ii].x;
+            forces(2*ii+1) = f0i * sin(h_cd.data[ii]) + h_f.data[ii].y;
             }
         v = solver.solve(forces);
         if (solver.info() != Eigen::Success)
@@ -126,8 +123,9 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionCPU()
             }
         for (int ii = 0; ii < Ndof; ++ii)
             { // displace according to current velocities
-            h_disp.data[ii].x = deltaT*v(2*ii);
-            h_disp.data[ii].y = deltaT*v(2*ii+1);
+                h_v.data[ii].x = v(2*ii);
+                h_v.data[ii].y = v(2*ii+1);
+                h_disp.data[ii] = deltaT*h_v.data[ii];
             // rotate the velocity vector a bit
             double Dri = h_motility.data[ii].y;
             double theta = h_cd.data[ii];
