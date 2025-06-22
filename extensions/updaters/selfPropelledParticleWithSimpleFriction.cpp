@@ -6,7 +6,7 @@
 /*! \file selfPropelledParticleWithSimpleFriction.cpp */
 selfPropelledParticleWithSimpleFriction::selfPropelledParticleWithSimpleFriction(int _N, double _xi_rel, bool _useGPU) 
         : selfPropelledParticleDynamics{_N, _useGPU}
-        , xi_rel{_xi_rel}, nnz{7*2*_N}   //#TODO: is this format of initialize nnz correct? 
+        , xi_rel{_xi_rel}, nnz{7*2*_N}   
     {
         // nnz = 7 * maxRows; // number of non-zero entries in the friction matrix
         if (_useGPU)
@@ -20,6 +20,9 @@ selfPropelledParticleWithSimpleFriction::selfPropelledParticleWithSimpleFriction
         cudaMalloc(&velocity_flat, maxRows * sizeof(double));
         cudaMalloc(&totalf_flat,  maxRows * sizeof(double));
         cudaMalloc(&d_row_sizes,  maxRows * sizeof(int));
+        cudaMalloc(&d_neigh_change, sizeof(int));
+        cudaMalloc(&old_nn,sizeof(int)*_N);
+        cudaMalloc(&old_n,sizeof(int)*_N*20);  //TODO: better evaluate the maxNeigh
         // create and initialize cudss structures
         cudssCreate(&handle);
         cudssConfigCreate(&config);
@@ -110,7 +113,7 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionCPU()
             {
             //displace according to current velocities and forces
             double f0i = h_motility.data[ii].x;
-            h_v.data[ii].x =  f0i * cos(h_cd.data[ii]);
+            h_v.data[ii].x =  f0i * cos(h_cd.data[ii]);   //#TODO: change the velocity to full velocity instead of active velocity. 
             h_v.data[ii].y =  f0i * sin(h_cd.data[ii]);
             double2 Vcur = h_v.data[ii];
             forces(2*ii) = Vcur.x + h_f.data[ii].x;
@@ -149,14 +152,12 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
         ArrayHandle<double2> d_disp(displacements,access_location::device,access_mode::overwrite);
         ArrayHandle<double2> d_motility(activeModel->Motility,access_location::device,access_mode::read);
         ArrayHandle<curandState> d_RNG(noise.RNGs,access_location::device,access_mode::readwrite);
-        // ArrayHandle<int> d_nn(activeModel->neighborNum,access_location::device,access_mode::read);
-        // ArrayHandle<int> d_n(activeModel->neighbors,access_location::device,access_mode::read);
-        // ArrayHandle<int> h_nn(activeModel->neighborNum,access_location::host,access_mode::read);
-        // ArrayHandle<int> h_n(activeModel->neighbors,access_location::host,access_mode::read);
+        ArrayHandle<int> d_nn(activeModel->neighborNum,access_location::device,access_mode::read);
+        ArrayHandle<int> d_n(activeModel->neighbors,access_location::device,access_mode::read);
         Index2D n_idx = activeModel->n_idx;
         gpu_spp_friction_eom_integration(
-                    activeModel->neighborNum,
-                    activeModel->neighbors,
+                    d_nn.data,
+                    d_n.data,
                     old_nn,
                     old_n,
                     nnz,
@@ -183,7 +184,8 @@ void selfPropelledParticleWithSimpleFriction::integrateEquationsOfMotionGPU()
                     data,
                     A,
                     b,
-                    x);
+                    x,
+                    d_neigh_change);
         };//end array handle scope
     activeModel->moveDegreesOfFreedom(displacements);
     activeModel->enforceTopology();
