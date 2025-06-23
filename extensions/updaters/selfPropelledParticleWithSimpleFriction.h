@@ -4,7 +4,7 @@
 #include "selfPropelledParticleDynamics.h"
 #include "std_include.h"
 #include <cuda_runtime.h>
-#include <libcudss/12/cudss.h>
+#include <cudss.h> 
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>

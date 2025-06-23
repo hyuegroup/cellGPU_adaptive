@@ -56,22 +56,28 @@ endif(${CMAKE_BUILD_TYPE} MATCHES "Debug")
 # set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmakeHelp)
 
 include_directories(
-            ${EIGEN3_INCLUDE_DIR}
-            inc
-            src/utility src/updaters src/simulation
-            src/models src/analysis src/databases
-            extensions/updaters
-   )
-
-add_subdirectory(src)
-add_subdirectory(extensions)
-
-find_library(CUDSS_LIB cudss
-             PATHS /usr/lib /usr/lib/x86_64-linux-gnu
-             NO_DEFAULT_PATH)
-
+  ${EIGEN3_INCLUDE_DIR}
+  ${CMAKE_SOURCE_DIR}/inc
+  ${CMAKE_SOURCE_DIR}/src/utility
+  ${CMAKE_SOURCE_DIR}/src/analysis
+  ${CMAKE_SOURCE_DIR}/src/models
+  ${CMAKE_SOURCE_DIR}/src/databases    # ← force this one in
+  ${CMAKE_SOURCE_DIR}/src/updaters
+  ${CMAKE_SOURCE_DIR}/src/simulation
+)
+if (CUDSS_ROOT)
+  include_directories(${CUDSS_ROOT}/include)
+endif()
+find_library(CUDSS_LIB
+  NAMES cudss
+  HINTS ${CUDSS_ROOT}
+  PATH_SUFFIXES lib lib64
+  NO_DEFAULT_PATH
+)
 if (NOT CUDSS_LIB)
-  message(FATAL_ERROR "Could not find libcudss (cudss)")
+  message(FATAL_ERROR "Could not find libcudss in ${CUDSS_ROOT}")
+else()
+  message(STATUS "Found cuDSS: ${CUDSS_LIB}")
 endif()
 
 set(myLibs
@@ -89,7 +95,9 @@ list(APPEND myLibs
     utilityGPU
 )
 # link_directories(${CUDA_LIBRARY_DIRS} $ENV{LD_LIBRARY_PATH})
+add_subdirectory(src)
 
+add_subdirectory(extensions)
 set(SOURCES
     )
 set(HEADERS
@@ -97,15 +105,25 @@ set(HEADERS
 
 # list the names of cpp files corresponding to linked executables you'd like...
 foreach(ARG
-        voronoi
-        Vertex
         voronoi_activeBD_friction
         )
 add_executable("${ARG}.out" "${ARG}.cpp" )
+target_include_directories("${ARG}.out" PUBLIC
+    ${EIGEN3_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/inc
+    ${CMAKE_SOURCE_DIR}/src/utility
+    ${CMAKE_SOURCE_DIR}/src/updaters
+    ${CMAKE_SOURCE_DIR}/src/simulation
+    ${CMAKE_SOURCE_DIR}/src/models
+    ${CMAKE_SOURCE_DIR}/src/analysis
+    ${CMAKE_SOURCE_DIR}/src/databases
+    ${CMAKE_SOURCE_DIR}/extensions/updaters
+)
 target_link_libraries("${ARG}.out"
     ${myLibs}
     CGAL::CGAL
     OpenMP::OpenMP_CXX
     ${CUDSS_LIB}
     )
+
 endforeach()
