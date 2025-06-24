@@ -25,15 +25,15 @@ double benchmark(int N, int use_gpu)
     int numpts = N; //number of cells
     int USE_GPU = use_gpu; //0 or greater uses a gpu, any negative number runs on the cpu
     int c;
-    int tSteps = 1000; //number of time steps to run after initialization
+    int tSteps = 10000; //number of time steps to run after initialization
     int initSteps = 100; //number of time steps to run for initialization
     int idx = 0;   //repeated ensemble no. 
 
     double dt = 0.01; //the time step size
     double p0 = 3.8;  //the preferred perimeter
     double a0 = 1.0;  // the preferred area
-    double v0 = 0.01;  // the velocity
-    double Dr = 1;    // the diffusivity
+    double v0 = 0.1;  // the velocity
+    double Dr = 1.0;    // the diffusivity
     double elapsed_ms = 0.0; //the elapsed time in milliseconds
     clock_t t1,t2; //clocks for timing information
     bool reproducible = false; // if you want random numbers with a more random seed each run, set this to false

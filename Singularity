@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.1.1-devel-ubuntu20.04
+From: nvidia/cuda:12.0.1-devel-ubuntu20.04
 
 %labels
     Author Haicen YUe
@@ -30,7 +30,7 @@ From: nvidia/cuda:12.1.1-devel-ubuntu20.04
         build-essential git wget ca-certificates \
         libgmp-dev libmpfr-dev libboost-all-dev \
         libeigen3-dev libhdf5-dev hdf5-tools libcgal-dev\
-        libnuma-dev libtbb-dev libopenmpi-dev \
+        libopenmpi-dev \
         tzdata \
       && rm -rf /var/lib/apt/lists/*
 
